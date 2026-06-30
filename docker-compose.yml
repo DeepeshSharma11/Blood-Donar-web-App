@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend-spring:
+    build:
+      context: ./backend-spring
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      # Add environment variables for Supabase database connections here if needed
+
+  backend-fastapi:
+    build:
+      context: ./backend-fastapi
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Add database URLs or API keys here if needed
+      - PORT=8000
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend-spring
+      - backend-fastapi
+    environment:
+      - NEXT_PUBLIC_SUPABASE_URL=YOUR_SUPABASE_URL
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY

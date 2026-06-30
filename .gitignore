@@ -1,0 +1,33 @@
+# Dependencies
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+
+# Java / Maven target files
+**/target/
+**/.mvn/
+**/.idea/
+**/*.iml
+
+# Python virtual envs and caches
+**/venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+
+# Environment configurations
+**/.env.local
+**/.env.*.local
+**/.env
+
+# OS / IDE temp files
+.DS_Store
+Thumbs.db
+**/.vscode/
+**/.settings/
+**/.project/
+**/.classpath/
