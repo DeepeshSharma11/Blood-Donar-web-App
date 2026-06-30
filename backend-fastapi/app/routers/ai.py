@@ -148,3 +148,93 @@ def check_eligibility(payload: EligibilityRequest):
             return EligibilityResponse(eligible=False, reason=f"Ineligible due to health condition: {condition}")
 
     return EligibilityResponse(eligible=True, reason="Meets standard blood donation eligibility criteria.")
+
+# --- Organ Matching Models & Routes ---
+
+class OrganMatchRequest(BaseModel):
+    organ_type: str = Field(..., description="Desired organ (e.g. Kidneys, Liver, Heart)")
+    latitude: float
+    longitude: float
+    radius_km: Optional[float] = 20.0
+    city: Optional[str] = None
+
+class OrganDonorMatch(BaseModel):
+    donor_id: str
+    name: str
+    organs: str
+    distance_km: float
+    match_score: float
+    phone: Optional[str] = None
+    urgency_recommendation: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+@router.post("/match-organs", response_model=List[OrganDonorMatch])
+def match_organs(payload: OrganMatchRequest):
+    """
+    Location-based matching for pledged organ donors with a fallback mechanism.
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=500, 
+            detail="Connection configurations are not set or invalid. Please check your credentials."
+        )
+
+    try:
+        response = supabase.table("organ_donors")\
+            .select("*")\
+            .eq("is_available", True)\
+            .execute()
+
+        matches = []
+        for donor in response.data:
+            pledged_organs = donor.get("organs", "")
+            if payload.organ_type.strip().lower() not in pledged_organs.strip().lower():
+                continue
+
+            city_matches = False
+            if payload.city and donor.get("city") and payload.city.strip().lower() in donor["city"].strip().lower():
+                city_matches = True
+            
+            has_coords = donor.get("latitude") is not None and donor.get("longitude") is not None
+
+            if not has_coords and not city_matches:
+                continue
+
+            dist = 0.0
+            if has_coords:
+                lat1, lon1 = math.radians(payload.latitude), math.radians(payload.longitude)
+                lat2, lon2 = math.radians(donor["latitude"]), math.radians(donor["longitude"])
+                
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                
+                a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                dist = 6371.0 * c # Earth radius in km
+
+            if city_matches or (has_coords and dist <= payload.radius_km):
+                if has_coords:
+                    score = max(0.5, 1.0 - (dist / (payload.radius_km * 2)))
+                    urgency = "Highly Recommended: Pledge donor is verified and close by." if score >= 0.8 else "Suitable Donor Match."
+                else:
+                    score = 0.9
+                    urgency = "Recommended Match: Located in the requested city."
+
+                matches.append(OrganDonorMatch(
+                    donor_id=str(donor["id"]),
+                    name=donor["name"],
+                    organs=donor["organs"],
+                    distance_km=round(dist, 1),
+                    match_score=round(score, 2),
+                    phone=donor.get("phone"),
+                    urgency_recommendation=urgency,
+                    latitude=donor.get("latitude"),
+                    longitude=donor.get("longitude")
+                ))
+        
+        matches.sort(key=lambda x: x.match_score, reverse=True)
+        return matches
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")

@@ -61,12 +61,6 @@ export default function Signup() {
       title: 'Hospital',
       description: 'Request blood units and track matches.',
       icon: Building2
-    },
-    {
-      id: 'admin',
-      title: 'Supervisor',
-      description: 'Verify clinics and oversee platform.',
-      icon: Shield
     }
   ] as const;
 

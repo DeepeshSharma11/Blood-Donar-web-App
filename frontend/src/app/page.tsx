@@ -1,23 +1,82 @@
 "use client";
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Search, UserPlus, Building2, Shield, Heart, ArrowRight } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
 export default function Home() {
+  const [stats, setStats] = useState({
+    totalDonors: 0,
+    activeRequests: 0,
+    hospitals: 0,
+    livesSaved: 0
+  });
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const { count: bDonors } = await supabase
+          .from('donors')
+          .select('*', { count: 'exact', head: true });
+        
+        const { count: oDonors } = await supabase
+          .from('organ_donors')
+          .select('*', { count: 'exact', head: true });
+
+        const { count: bReqs } = await supabase
+          .from('blood_requests')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['Searching', 'Matched']);
+        
+        const { count: oReqs } = await supabase
+          .from('organ_requests')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['Searching', 'Matched']);
+
+        const { count: hosps } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'hospital')
+          .eq('is_verified', true);
+
+        const { count: bSaved } = await supabase
+          .from('blood_requests')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'Completed');
+        
+        const { count: oSaved } = await supabase
+          .from('organ_requests')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'Completed');
+
+        setStats({
+          totalDonors: (bDonors || 0) + (oDonors || 0),
+          activeRequests: (bReqs || 0) + (oReqs || 0),
+          hospitals: hosps || 0,
+          livesSaved: (bSaved || 0) + (oSaved || 0)
+        });
+      } catch (e) {
+        console.warn("Failed to fetch live homepage stats:", e);
+      }
+    };
+    fetchStats();
+  }, []);
+
   const cards = [
     {
       title: "Locate Donors",
-      description: "Search for active donors in your area. Use our smart locator to find the closest matches in seconds.",
+      description: "Search for active blood and organ donors in your area. Use our smart locator to find the closest matches in seconds.",
       href: "/locate",
       icon: Search,
       color: "from-red-50/40 to-stone-50/20",
       borderColor: "hover:border-red-500/20",
-      iconColor: "text-red-600",
+      iconColor: "text-red-655",
       buttonText: "Find Donors"
     },
     {
       title: "Register as Donor",
-      description: "Join our lifesaver network. Update your details, health records, and availability for donation.",
+      description: "Join our lifesaver network. Pledge blood, organs, or both to help patients in critical need.",
       href: "/donor",
       icon: UserPlus,
       color: "from-emerald-50/40 to-stone-50/20",
@@ -27,7 +86,7 @@ export default function Home() {
     },
     {
       title: "Hospital Center",
-      description: "For medical institutions. Request blood units, monitor active matches, and manage availability.",
+      description: "For medical institutions. Request blood units, register organ requirements, and monitor active matches.",
       href: "/hospital",
       icon: Building2,
       color: "from-blue-50/40 to-stone-50/20",
@@ -65,7 +124,7 @@ export default function Home() {
           </span>
         </h1>
         <p className="text-stone-600 text-base md:text-lg max-w-2xl mx-auto leading-relaxed">
-          A smart blood donation registry connecting patients, donors, and hospitals instantly. Verify eligibility, search locations, and coordinate saves.
+          A smart blood and organ donation registry connecting patients, donors, and hospitals instantly. Verify eligibility, search locations, and coordinate saves.
         </p>
       </div>
 
@@ -101,19 +160,19 @@ export default function Home() {
       {/* Stats Bar */}
       <div className="max-w-6xl w-full grid grid-cols-2 md:grid-cols-4 gap-4 mt-20 pt-8 border-t border-stone-200 text-center z-10">
         <div>
-          <div className="text-3xl font-extrabold text-stone-900">12,450+</div>
-          <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Total Donors</div>
+          <div className="text-3xl font-extrabold text-stone-900">{stats.totalDonors}</div>
+          <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Total Pledged Donors</div>
         </div>
         <div>
-          <div className="text-3xl font-extrabold text-red-600">142</div>
-          <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Active Requests</div>
+          <div className="text-3xl font-extrabold text-red-600">{stats.activeRequests}</div>
+          <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Active Clinic Requests</div>
         </div>
         <div>
-          <div className="text-3xl font-extrabold text-stone-900">89</div>
+          <div className="text-3xl font-extrabold text-stone-900">{stats.hospitals}</div>
           <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Hospitals Connected</div>
         </div>
         <div>
-          <div className="text-3xl font-extrabold text-emerald-600">9,820</div>
+          <div className="text-3xl font-extrabold text-emerald-600">{stats.livesSaved}</div>
           <div className="text-xs text-stone-500 uppercase tracking-wider font-semibold mt-1">Lives Saved</div>
         </div>
       </div>

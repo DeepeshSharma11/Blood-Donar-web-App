@@ -15,12 +15,23 @@ interface BloodRequest {
   created_at: string;
 }
 
+interface OrganRequest {
+  id: string;
+  hospital_name: string;
+  organ_type: string;
+  urgency: 'Emergency' | 'High' | 'Medium' | 'Low';
+  status: 'Searching' | 'Matched' | 'Completed';
+  created_at: string;
+}
+
 export default function HospitalPortal() {
   const router = useRouter();
   const [authLoading, setAuthLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
 
+  const [requestType, setRequestType] = useState<'blood' | 'organ'>('blood');
   const [requests, setRequests] = useState<BloodRequest[]>([]);
+  const [organRequests, setOrganRequests] = useState<OrganRequest[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [notification, setNotification] = useState<{ message: string; urgency: string } | null>(null);
@@ -28,11 +39,13 @@ export default function HospitalPortal() {
   const [form, setForm] = useState({
     hospitalName: '',
     bloodType: 'O+',
+    organType: 'Kidneys',
     units: 1,
-    urgency: 'High' as BloodRequest['urgency']
+    urgency: 'High' as 'Emergency' | 'High' | 'Medium' | 'Low'
   });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const organOptions = ['Kidneys', 'Liver', 'Lungs', 'Heart', 'Corneas', 'Pancreas'];
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -87,12 +100,15 @@ export default function HospitalPortal() {
       ws.onmessage = (event) => {
         try {
           const messageData = JSON.parse(event.data);
-          if (messageData.type === 'BLOOD_REQUEST_CREATED') {
+          if (messageData.type === 'BLOOD_REQUEST_CREATED' || messageData.type === 'ORGAN_REQUEST_CREATED') {
             fetchData();
             
             if (messageData.urgency === 'Emergency' || messageData.urgency === 'High') {
+              const label = messageData.type === 'BLOOD_REQUEST_CREATED' 
+                ? `${messageData.units} units of ${messageData.blood_type}`
+                : `${messageData.organ_type}`;
               setNotification({
-                message: `⚠️ ${messageData.hospital_name} issued an urgent request for ${messageData.units} units of ${messageData.blood_type}!`,
+                message: `⚠️ ${messageData.hospital_name} issued an urgent requirement for ${label}!`,
                 urgency: messageData.urgency
               });
               setTimeout(() => setNotification(null), 6000);
@@ -109,7 +125,7 @@ export default function HospitalPortal() {
 
       wsRef.current = ws;
     } catch (err) {
-      console.warn("WebSocket server offline, real-time broadcasts disabled.");
+      console.warn("WebSocket server offline.");
     }
   };
 
@@ -123,6 +139,15 @@ export default function HospitalPortal() {
       if (reqsErr) throw reqsErr;
       setRequests(reqs || []);
 
+      const { data: oReqs, error: oReqsErr } = await supabase
+        .from('organ_requests')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (oReqsErr) throw oReqsErr;
+      setOrganRequests(oReqs || []);
+
+      // Calculate simple inventory from active blood donors
       const { data: donors, error: donorsErr } = await supabase
         .from('donors')
         .select('blood_group')
@@ -169,32 +194,54 @@ export default function HospitalPortal() {
     setSubmitLoading(true);
 
     try {
-      const { error } = await supabase
-        .from('blood_requests')
-        .insert([{
-          hospital_name: form.hospitalName,
-          blood_type: form.bloodType,
-          units: form.units,
-          urgency: form.urgency,
-          status: 'Searching'
-        }]);
+      if (requestType === 'blood') {
+        const { error } = await supabase
+          .from('blood_requests')
+          .insert([{
+            hospital_name: form.hospitalName,
+            blood_type: form.bloodType,
+            units: form.units,
+            urgency: form.urgency,
+            status: 'Searching'
+          }]);
 
-      if (error) throw error;
+        if (error) throw error;
 
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'BLOOD_REQUEST_CREATED',
-          hospital_name: form.hospitalName,
-          blood_type: form.bloodType,
-          units: form.units,
-          urgency: form.urgency
-        }));
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'BLOOD_REQUEST_CREATED',
+            hospital_name: form.hospitalName,
+            blood_type: form.bloodType,
+            units: form.units,
+            urgency: form.urgency
+          }));
+        }
+      } else {
+        const { error } = await supabase
+          .from('organ_requests')
+          .insert([{
+            hospital_name: form.hospitalName,
+            organ_type: form.organType,
+            urgency: form.urgency,
+            status: 'Searching'
+          }]);
+
+        if (error) throw error;
+
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'ORGAN_REQUEST_CREATED',
+            hospital_name: form.hospitalName,
+            organ_type: form.organType,
+            urgency: form.urgency
+          }));
+        }
       }
 
       setForm(f => ({ ...f, units: 1, urgency: 'High' }));
       await fetchData();
     } catch (err) {
-      console.error('Error creating blood request:', err);
+      console.error('Error creating request:', err);
     } finally {
       setSubmitLoading(false);
     }
@@ -219,9 +266,9 @@ export default function HospitalPortal() {
       {/* Toast Notification Alert */}
       {notification && (
         <div className="fixed bottom-6 right-6 z-50 max-w-sm p-4 rounded-xl bg-red-50 border border-red-200 text-stone-900 shadow-xl shadow-stone-200/50 flex items-start gap-3 animate-bounce">
-          <Bell className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+          <Bell className="w-5 h-5 text-red-650 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
-            <h4 className="text-xs font-bold uppercase text-red-700 tracking-wider">Emergency Requirement Alert</h4>
+            <h4 className="text-xs font-bold uppercase text-red-700 tracking-wider">Clinical Alert</h4>
             <p className="text-xs text-stone-700 mt-1 leading-relaxed">{notification.message}</p>
           </div>
           <button onClick={() => setNotification(null)} className="text-stone-400 hover:text-stone-650 transition-colors">
@@ -236,7 +283,7 @@ export default function HospitalPortal() {
           <h1 className="text-3xl font-extrabold text-stone-900 flex items-center gap-2">
             <Building2 className="w-8 h-8 text-blue-600" /> Hospital Center
           </h1>
-          <p className="text-stone-600 mt-2">Manage blood inventory alerts, issue urgent requirements, and check compatible donor matches.</p>
+          <p className="text-stone-600 mt-2">Manage blood inventory alerts, issue critical requirements, and match compatible organ donor registries.</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-xl font-bold uppercase tracking-wider">
@@ -282,8 +329,34 @@ export default function HospitalPortal() {
           {/* Request Form */}
           <form onSubmit={handleCreateRequest} className="bg-white border border-stone-200/60 p-6 rounded-2xl shadow-sm shadow-stone-100 space-y-4">
             <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <PlusCircle className="w-4 h-4 text-blue-600" /> Request Blood Units
+              <PlusCircle className="w-4 h-4 text-blue-600" /> Submit Clinic Request
             </h3>
+
+            {/* Request Type */}
+            <div className="grid grid-cols-2 gap-2 border-b border-stone-100 pb-3">
+              <button
+                type="button"
+                onClick={() => setRequestType('blood')}
+                className={`py-2 rounded-lg text-xs font-bold border transition-all ${
+                  requestType === 'blood'
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-stone-50 border-stone-200 text-stone-500'
+                }`}
+              >
+                Blood Unit
+              </button>
+              <button
+                type="button"
+                onClick={() => setRequestType('organ')}
+                className={`py-2 rounded-lg text-xs font-bold border transition-all ${
+                  requestType === 'organ'
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-stone-50 border-stone-200 text-stone-500'
+                }`}
+              >
+                Organ Transplant
+              </button>
+            </div>
             
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-semibold text-stone-500 uppercase">Hospital Name</label>
@@ -298,37 +371,52 @@ export default function HospitalPortal() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            {requestType === 'blood' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-semibold text-stone-500 uppercase">Blood Group</label>
+                  <select 
+                    value={form.bloodType}
+                    onChange={(e) => setForm({...form, bloodType: e.target.value})}
+                    className="bg-stone-50 border border-stone-200 text-stone-900 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
+                  >
+                    {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => (
+                      <option key={bg} value={bg}>{bg}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-semibold text-stone-500 uppercase">Units Needed</label>
+                  <input 
+                    type="number" 
+                    min="1"
+                    value={form.units}
+                    onChange={(e) => setForm({...form, units: parseInt(e.target.value) || 1})}
+                    className="bg-stone-50 border border-stone-200 text-stone-900 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+            ) : (
               <div className="flex flex-col gap-1">
-                <label className="text-2xs font-semibold text-stone-500 uppercase">Blood Group</label>
+                <label className="text-2xs font-semibold text-stone-500 uppercase">Organ Type</label>
                 <select 
-                  value={form.bloodType}
-                  onChange={(e) => setForm({...form, bloodType: e.target.value})}
+                  value={form.organType}
+                  onChange={(e) => setForm({...form, organType: e.target.value})}
                   className="bg-stone-50 border border-stone-200 text-stone-900 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
                 >
-                  {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => (
-                    <option key={bg} value={bg}>{bg}</option>
+                  {organOptions.map(org => (
+                    <option key={org} value={org}>{org}</option>
                   ))}
                 </select>
               </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-2xs font-semibold text-stone-500 uppercase">Units Needed</label>
-                <input 
-                  type="number" 
-                  min="1"
-                  value={form.units}
-                  onChange={(e) => setForm({...form, units: parseInt(e.target.value) || 1})}
-                  className="bg-stone-50 border border-stone-200 text-stone-900 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-            </div>
+            )}
 
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-semibold text-stone-500 uppercase">Urgency Level</label>
               <select 
                 value={form.urgency}
-                onChange={(e) => setForm({...form, urgency: e.target.value as BloodRequest['urgency']})}
+                onChange={(e) => setForm({...form, urgency: e.target.value as any})}
                 className="bg-stone-50 border border-stone-200 text-stone-900 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
               >
                 <option value="Emergency">🚨 Emergency (Immediate)</option>
@@ -351,6 +439,8 @@ export default function HospitalPortal() {
 
         {/* Right Side: Active Requests Ledger */}
         <div className="lg:col-span-2 space-y-6">
+          
+          {/* Blood requests */}
           <div className="bg-white border border-stone-200/60 p-6 rounded-2xl shadow-sm shadow-stone-100 flex-1 flex flex-col">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold text-stone-900 flex items-center gap-2">
@@ -416,11 +506,79 @@ export default function HospitalPortal() {
             </div>
 
             {requests.length === 0 && (
-              <div className="text-center py-12 text-stone-500 text-sm">
+              <div className="text-center py-6 text-stone-500 text-sm">
                 No active blood requests in the ledger.
               </div>
             )}
           </div>
+
+          {/* Organ requests */}
+          <div className="bg-white border border-stone-200/60 p-6 rounded-2xl shadow-sm shadow-stone-100 flex-1 flex flex-col">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold text-stone-900 flex items-center gap-2">
+                <ListFilter className="w-5 h-5 text-stone-500" /> Active Organ Transplant Requirements
+              </h3>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-stone-200 text-stone-500 text-xs uppercase tracking-wider font-semibold">
+                    <th className="pb-3">ID</th>
+                    <th className="pb-3">Hospital</th>
+                    <th className="pb-3">Pledged Organ</th>
+                    <th className="pb-3">Urgency</th>
+                    <th className="pb-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {organRequests.map(req => {
+                    const urgencyColors = {
+                      Emergency: 'text-red-700 bg-red-50 border border-red-200',
+                      High: 'text-orange-700 bg-orange-50 border border-orange-200',
+                      Medium: 'text-blue-700 bg-blue-50 border border-blue-200',
+                      Low: 'text-stone-700 bg-stone-100 border border-stone-150'
+                    };
+
+                    const statusColors = {
+                      Searching: 'text-amber-700 border border-amber-200 bg-amber-50',
+                      Matched: 'text-emerald-700 border border-emerald-200 bg-emerald-50',
+                      Completed: 'text-stone-500 border border-stone-200 bg-stone-50'
+                    };
+
+                    return (
+                      <tr key={req.id} className="group hover:bg-stone-50/40 transition-colors">
+                        <td className="py-4 font-semibold text-stone-500">#{req.id}</td>
+                        <td className="py-4 font-bold text-stone-900">{req.hospital_name}</td>
+                        <td className="py-4 font-bold text-stone-850">
+                          {req.organ_type}
+                        </td>
+                        <td className="py-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-2xs font-extrabold uppercase ${urgencyColors[req.urgency]}`}>
+                            {req.urgency}
+                          </span>
+                        </td>
+                        <td className="py-4">
+                          <span className={`px-2 py-0.5 rounded text-2xs font-semibold flex items-center gap-1 w-max ${statusColors[req.status]}`}>
+                            {req.status === 'Searching' && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse inline-block" />}
+                            {req.status === 'Matched' && <Sparkles className="w-3 h-3 text-emerald-600 inline-block" />}
+                            {req.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {organRequests.length === 0 && (
+              <div className="text-center py-6 text-stone-500 text-sm">
+                No active organ transplant requirements.
+              </div>
+            )}
+          </div>
+
         </div>
 
       </div>

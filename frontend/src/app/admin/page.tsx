@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Shield, Users, Building, Activity, FileText, Check, X, AlertTriangle } from 'lucide-react';
+import { Shield, Users, Building, Activity, FileText, Check, X, AlertTriangle, Heart } from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -18,12 +18,12 @@ export default function AdminDashboard() {
   const [authLoading, setAuthLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   
-  // Real-Time Stats
   const [stats, setStats] = useState({
     totalUsers: 0,
     activeDonors: 0,
     totalHospitals: 0,
-    pendingVerifications: 0
+    pendingVerifications: 0,
+    organDonors: 0
   });
 
   const [hospitals, setHospitals] = useState<Profile[]>([]);
@@ -131,11 +131,17 @@ export default function AdminDashboard() {
 
       const pendingCount = hospList?.filter(h => !h.is_verified).length || 0;
 
+      const { count: organDonorsCount } = await supabase
+        .from('organ_donors')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_available', true);
+
       setStats({
         totalUsers: usersCount || 0,
         activeDonors: donorsCount || 0,
         totalHospitals: hospCount || 0,
-        pendingVerifications: pendingCount
+        pendingVerifications: pendingCount,
+        organDonors: organDonorsCount || 0
       });
 
       setHospitals(hospList || []);
@@ -221,9 +227,9 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
           { title: "Total Registered Users", value: stats.totalUsers, icon: Users, change: "All active roles", color: "text-blue-600 bg-blue-50/50" },
-          { title: "Active Verified Donors", value: stats.activeDonors, icon: Activity, change: "Available for requests", color: "text-rose-600 bg-rose-50/50" },
-          { title: "Affiliated Hospitals", value: stats.totalHospitals, icon: Building, change: `${stats.pendingVerifications} pending verification`, color: "text-amber-600 bg-amber-50/50" },
-          { title: "Reports & Logs", value: "Verified", icon: FileText, change: "Secure connection live", color: "text-stone-600 bg-stone-50/50" }
+          { title: "Active Blood Donors", value: stats.activeDonors, icon: Activity, change: "Available for requests", color: "text-rose-600 bg-rose-50/50" },
+          { title: "Active Organ Pledges", value: stats.organDonors, icon: Heart, change: "Transplant matches", color: "text-red-600 bg-red-50/50" },
+          { title: "Affiliated Hospitals", value: stats.totalHospitals, icon: Building, change: `${stats.pendingVerifications} pending verification`, color: "text-amber-600 bg-amber-50/50" }
         ].map((stat, idx) => {
           const Icon = stat.icon;
           return (

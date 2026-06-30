@@ -13,7 +13,11 @@ export default function RegisterDonor() {
   const [authLoading, setAuthLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   const [existingDonor, setExistingDonor] = useState<any>(null);
+  const [existingOrganDonor, setExistingOrganDonor] = useState<any>(null);
   const [emergencyAlert, setEmergencyAlert] = useState<{ hospital: string; units: number; group: string } | null>(null);
+
+  const [donorType, setDonorType] = useState<'blood' | 'organ' | 'both'>('blood');
+  const [pledgedOrgans, setPledgedOrgans] = useState<string[]>([]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -39,6 +43,7 @@ export default function RegisterDonor() {
 
   const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
   const healthConditionsList = ['Diabetes (on Insulin)', 'Hepatitis', 'HIV / AIDS', 'Cancer', 'Hypertension (Controlled)', 'None of these'];
+  const organOptions = ['Kidneys', 'Liver', 'Lungs', 'Heart', 'Corneas', 'Pancreas'];
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -68,6 +73,9 @@ export default function RegisterDonor() {
           email: session.user.email || ''
         }));
 
+        let hasBlood = false;
+        let hasOrgan = false;
+
         const { data: donor } = await supabase
           .from('donors')
           .select('*')
@@ -75,6 +83,7 @@ export default function RegisterDonor() {
           .maybeSingle();
 
         if (donor) {
+          hasBlood = true;
           setExistingDonor(donor);
           setFormData({
             name: donor.name,
@@ -90,6 +99,41 @@ export default function RegisterDonor() {
             latitude: donor.latitude || 28.6139,
             longitude: donor.longitude || 77.2090
           });
+        }
+
+        try {
+          const organRes = await fetch(`http://localhost:8080/api/donors/organ/profile/${session.user.id}`);
+          if (organRes.ok) {
+            const organDonor = await organRes.json();
+            if (organDonor) {
+              hasOrgan = true;
+              setExistingOrganDonor(organDonor);
+              setPledgedOrgans(organDonor.organs.split(', '));
+              if (!donor) {
+                setFormData(f => ({
+                  ...f,
+                  name: organDonor.name,
+                  email: organDonor.email,
+                  phone: organDonor.phone,
+                  city: organDonor.city || '',
+                  state: organDonor.state || '',
+                  isAvailable: organDonor.is_available,
+                  latitude: organDonor.latitude || 28.6139,
+                  longitude: organDonor.longitude || 77.2090
+                }));
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Organ profile fetch offline.");
+        }
+
+        if (hasBlood && hasOrgan) {
+          setDonorType('both');
+        } else if (hasOrgan) {
+          setDonorType('organ');
+        } else {
+          setDonorType('blood');
         }
 
         setAuthLoading(false);
@@ -202,63 +246,108 @@ export default function RegisterDonor() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Auth session expired.");
 
-      const eligibilityRes = await fetch('http://localhost:8000/ai/health-eligibility', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          age: formData.age,
-          weight_kg: formData.weight,
-          last_donation_months: formData.lastDonationMonths,
-          health_conditions: conditions
-        })
-      });
+      if (donorType === 'blood' || donorType === 'both') {
+        const eligibilityRes = await fetch('http://localhost:8000/ai/health-eligibility', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            age: formData.age,
+            weight_kg: formData.weight,
+            last_donation_months: formData.lastDonationMonths,
+            health_conditions: conditions
+          })
+        });
 
-      let eligibilityData = { eligible: true, reason: 'Eligible' };
-      if (eligibilityRes.ok) {
-        eligibilityData = await eligibilityRes.json();
+        let eligibilityData = { eligible: true, reason: 'Eligible' };
+        if (eligibilityRes.ok) {
+          eligibilityData = await eligibilityRes.json();
+        }
+
+        if (!eligibilityData.eligible) {
+          setStatus({
+            type: 'error',
+            message: `Blood Eligibility check: ${eligibilityData.reason}`
+          });
+          setChecking(false);
+          return;
+        }
       }
 
-      if (!eligibilityData.eligible) {
+      if ((donorType === 'organ' || donorType === 'both') && pledgedOrgans.length === 0) {
         setStatus({
           type: 'error',
-          message: `Eligibility check: ${eligibilityData.reason}`
+          message: 'Please select at least one organ to pledge for donation.'
         });
         setChecking(false);
         return;
       }
 
-      const springRes = await fetch('http://localhost:8080/api/donors/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: existingDonor?.id || null, 
-          userId: session.user.id,
-          name: formData.name,
-          email: formData.email,
-          phone: formData.phone,
-          bloodGroup: formData.bloodGroup,
-          city: formData.city,
-          state: formData.state,
-          isAvailable: formData.isAvailable,
-          lastDonationDate: new Date(Date.now() - formData.lastDonationMonths * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-        })
-      });
+      let successMessage = '';
 
-      if (springRes.ok) {
-        const saved = await springRes.json();
-        setExistingDonor(saved);
-        setStatus({
-          type: 'success',
-          message: existingDonor 
-            ? 'Successfully updated your donor record details!' 
-            : 'Successfully registered as an active donor! Thank you for your contribution.'
+      if (donorType === 'blood' || donorType === 'both') {
+        const springRes = await fetch('http://localhost:8080/api/donors/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: existingDonor?.id || null, 
+            userId: session.user.id,
+            name: formData.name,
+            email: formData.email,
+            phone: formData.phone,
+            bloodGroup: formData.bloodGroup,
+            city: formData.city,
+            state: formData.state,
+            isAvailable: formData.isAvailable,
+            lastDonationDate: new Date(Date.now() - formData.lastDonationMonths * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+          })
         });
-      } else {
-        throw new Error("Registration service failed.");
+
+        if (springRes.ok) {
+          const saved = await springRes.json();
+          setExistingDonor(saved);
+          successMessage = 'Successfully updated your blood donor details!';
+        } else {
+          throw new Error("Blood registration service failed.");
+        }
       }
 
+      if (donorType === 'organ' || donorType === 'both') {
+        const organRes = await fetch('http://localhost:8080/api/donors/organ/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: existingOrganDonor?.id || null,
+            userId: session.user.id,
+            name: formData.name,
+            email: formData.email,
+            phone: formData.phone,
+            organs: pledgedOrgans.join(', '),
+            city: formData.city,
+            state: formData.state,
+            isAvailable: formData.isAvailable,
+            latitude: formData.latitude,
+            longitude: formData.longitude
+          })
+        });
+
+        if (organRes.ok) {
+          const saved = await organRes.json();
+          setExistingOrganDonor(saved);
+          successMessage = successMessage 
+            ? 'Successfully registered/updated your blood & organ pledge registries!'
+            : 'Successfully registered your organ pledge registry!';
+        } else {
+          throw new Error("Organ registration service failed.");
+        }
+      }
+
+      setStatus({
+        type: 'success',
+        message: successMessage || 'Success!'
+      });
+
     } catch (err) {
-      console.warn("Backend servers offline, registering locally in browser storage.");
+      console.warn("Backend servers offline, registering locally (Sandbox Mode).");
       setStatus({
         type: 'success',
         message: 'Registration simulated successfully (Sandbox Mode).'
@@ -288,9 +377,9 @@ export default function RegisterDonor() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-extrabold text-stone-900 flex items-center gap-2">
-            <Heart className="w-8 h-8 text-red-600 fill-red-600/10" /> Become a Blood Donor
+            <Heart className="w-8 h-8 text-red-600 fill-red-600/10" /> Pledging & Donation Center
           </h1>
-          <p className="text-stone-600 mt-2">Become a certified donor. Your availability will help save lives during medical emergencies.</p>
+          <p className="text-stone-600 mt-2">Become a blood donor or pledge your organs to save lives during critical transplants.</p>
         </div>
         <button 
           onClick={handleLogout}
@@ -300,12 +389,14 @@ export default function RegisterDonor() {
         </button>
       </div>
 
-      {existingDonor && (
+      {(existingDonor || existingOrganDonor) && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center gap-3">
           <UserCheck className="w-6 h-6 flex-shrink-0" />
           <div>
             <span className="text-sm font-bold block">You are already registered!</span>
-            <span className="text-xs text-stone-500">Below are your currently published details. You can update them at any time.</span>
+            <span className="text-xs text-stone-500">
+              Below are your currently published details. You can update your pledge and availability details at any time.
+            </span>
           </div>
         </div>
       )}
@@ -316,7 +407,7 @@ export default function RegisterDonor() {
           <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-stone-900 flex items-center justify-between gap-3 animate-pulse">
             <div className="flex items-center gap-2">
               <span className="text-sm font-extrabold text-red-700">🚨 CRITICAL NEED:</span>
-              <span className="text-xs text-stone-700">
+              <span className="text-xs text-stone-755">
                 {emergencyAlert.hospital} urgently needs {emergencyAlert.units} units of {emergencyAlert.group}!
               </span>
             </div>
@@ -343,6 +434,31 @@ export default function RegisterDonor() {
             <span className="text-sm font-semibold">{status.message}</span>
           </div>
         )}
+
+        {/* Pledge Type Choice */}
+        <div className="space-y-4">
+          <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2">Select Pledge Type</h3>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { id: 'blood', title: 'Blood Donation' },
+              { id: 'organ', title: 'Organ Pledging' },
+              { id: 'both', title: 'Blood & Organ Pledging' }
+            ].map((t) => (
+              <button
+                type="button"
+                key={t.id}
+                onClick={() => setDonorType(t.id as any)}
+                className={`py-3 rounded-xl font-bold border transition-all ${
+                  donorType === t.id
+                    ? 'bg-red-50 border-red-200 text-red-700 shadow-sm shadow-red-50 scale-[1.01]'
+                    : 'bg-stone-50 border-stone-200 text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                {t.title}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Section 1: Basic Info */}
         <div className="space-y-4">
@@ -430,85 +546,128 @@ export default function RegisterDonor() {
           </div>
         </div>
 
-        {/* Section 2: Blood Group */}
-        <div className="space-y-4">
-          <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2">2. Select Blood Group</h3>
-          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-            {bloodGroups.map((group) => (
-              <button
-                type="button"
-                key={group}
-                onClick={() => setFormData({ ...formData, bloodGroup: group })}
-                className={`py-3 rounded-xl font-bold border transition-all duration-200 ${
-                  formData.bloodGroup === group
-                    ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-600/10 scale-105'
-                    : 'bg-stone-50 border-stone-200 text-stone-600 hover:text-stone-900 hover:bg-stone-100/70'
-                }`}
-              >
-                {group}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Section 3: Health & Eligibility */}
-        <div className="space-y-4">
-          <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-red-600" /> 3. Health Eligibility Check
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-stone-500 uppercase">Age (Years)</label>
-              <input 
-                type="number" 
-                value={formData.age}
-                onChange={(e) => setFormData({ ...formData, age: parseInt(e.target.value) || 0 })}
-                className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-stone-500 uppercase">Weight (kg)</label>
-              <input 
-                type="number" 
-                value={formData.weight}
-                onChange={(e) => setFormData({ ...formData, weight: parseInt(e.target.value) || 0 })}
-                className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-stone-500 uppercase">Last Donation (Months Ago)</label>
-              <input 
-                type="number" 
-                value={formData.lastDonationMonths}
-                onChange={(e) => setFormData({ ...formData, lastDonationMonths: parseInt(e.target.value) || 0 })}
-                className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
-              />
+        {/* Section 2: Blood Group (Only Blood or Both) */}
+        {(donorType === 'blood' || donorType === 'both') && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2">2. Select Blood Group</h3>
+            <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+              {bloodGroups.map((group) => (
+                <button
+                  type="button"
+                  key={group}
+                  onClick={() => setFormData({ ...formData, bloodGroup: group })}
+                  className={`py-3 rounded-xl font-bold border transition-all duration-200 ${
+                    formData.bloodGroup === group
+                      ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-600/10 scale-105'
+                      : 'bg-stone-50 border-stone-200 text-stone-600 hover:text-stone-900 hover:bg-stone-100/70'
+                  }`}
+                >
+                  {group}
+                </button>
+              ))}
             </div>
           </div>
+        )}
 
-          <div className="flex flex-col gap-2 mt-4">
-            <label className="text-xs font-semibold text-stone-500 uppercase">Health History / Chronic Conditions</label>
-            <div className="flex flex-wrap gap-2">
-              {healthConditionsList.map((cond) => {
-                const isSelected = conditions.includes(cond) || (cond === 'None of these' && conditions.length === 0);
+        {/* Section 3: Health & Eligibility (Only Blood or Both) */}
+        {(donorType === 'blood' || donorType === 'both') && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2 flex items-center gap-2">
+              <Activity className="w-5 h-5 text-red-600" /> 3. Blood Health Eligibility
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold text-stone-500 uppercase">Age (Years)</label>
+                <input 
+                  type="number" 
+                  value={formData.age}
+                  onChange={(e) => setFormData({ ...formData, age: parseInt(e.target.value) || 0 })}
+                  className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold text-stone-500 uppercase">Weight (kg)</label>
+                <input 
+                  type="number" 
+                  value={formData.weight}
+                  onChange={(e) => setFormData({ ...formData, weight: parseInt(e.target.value) || 0 })}
+                  className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold text-stone-500 uppercase">Last Donation (Months Ago)</label>
+                <input 
+                  type="number" 
+                  value={formData.lastDonationMonths}
+                  onChange={(e) => setFormData({ ...formData, lastDonationMonths: parseInt(e.target.value) || 0 })}
+                  className="bg-stone-50 border border-stone-200 text-stone-900 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 mt-4">
+              <label className="text-xs font-semibold text-stone-500 uppercase">Health History / Chronic Conditions</label>
+              <div className="flex flex-wrap gap-2">
+                {healthConditionsList.map((cond) => {
+                  const isSelected = conditions.includes(cond) || (cond === 'None of these' && conditions.length === 0);
+                  return (
+                    <button
+                      type="button"
+                      key={cond}
+                      onClick={() => handleConditionChange(cond)}
+                      className={`px-3 py-2 rounded-xl text-xs font-medium border transition-all ${
+                        isSelected
+                          ? 'bg-red-50 border-red-200 text-red-700 font-semibold'
+                          : 'bg-stone-50 border-stone-200 text-stone-600 hover:text-stone-900'
+                      }`}
+                    >
+                      {cond}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Section 4: Organ Pledge (Only Organ or Both) */}
+        {(donorType === 'organ' || donorType === 'both') && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-stone-900 border-b border-stone-100 pb-2">2. Pledged Organs</h3>
+            <p className="text-xs text-stone-500">Check the organs you wish to pledge for medical transplant matches:</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {organOptions.map((org) => {
+                const checked = pledgedOrgans.includes(org);
                 return (
                   <button
                     type="button"
-                    key={cond}
-                    onClick={() => handleConditionChange(cond)}
-                    className={`px-3 py-2 rounded-xl text-xs font-medium border transition-all ${
-                      isSelected
-                        ? 'bg-red-50 border-red-200 text-red-700 font-semibold'
-                        : 'bg-stone-50 border-stone-200 text-stone-600 hover:text-stone-900'
+                    key={org}
+                    onClick={() => {
+                      if (checked) {
+                        setPledgedOrgans(pledgedOrgans.filter(o => o !== org));
+                      } else {
+                        setPledgedOrgans([...pledgedOrgans, org]);
+                      }
+                    }}
+                    className={`p-3.5 rounded-xl border text-left flex items-center justify-between transition-all ${
+                      checked
+                        ? 'bg-red-50 border-red-200 text-red-700 font-bold scale-[1.01]'
+                        : 'bg-stone-50 border-stone-200 text-stone-650 hover:text-stone-900 hover:bg-stone-100/60'
                     }`}
                   >
-                    {cond}
+                    <span>{org}</span>
+                    <input 
+                      type="checkbox"
+                      checked={checked}
+                      readOnly
+                      className="accent-red-650 h-4 w-4 rounded pointer-events-none"
+                    />
                   </button>
                 );
               })}
             </div>
           </div>
-        </div>
+        )}
 
         {/* Availability Switch */}
         <div className="flex items-center justify-between p-4 bg-stone-50 border border-stone-200/60 rounded-2xl">
@@ -536,11 +695,11 @@ export default function RegisterDonor() {
           {checking ? (
             <>
               <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-              Checking health criteria...
+              Verifying credentials...
             </>
           ) : (
             <>
-              <ShieldCheck className="w-5 h-5" /> {existingDonor ? 'Update Profile' : 'Submit Registration'}
+              <ShieldCheck className="w-5 h-5" /> {existingDonor || existingOrganDonor ? 'Update Profiles' : 'Submit Pledge'}
             </>
           )}
         </button>
