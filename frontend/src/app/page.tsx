@@ -112,11 +112,7 @@ export default function Home() {
       <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-red-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Hero Section */}
       <div className="max-w-4xl text-center space-y-6 z-10 mb-16">
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-50 border border-red-200/60 text-red-600 text-xs font-semibold uppercase tracking-wider">
-          <Heart className="w-3.5 h-3.5 fill-red-600" /> Connecting Lives in Real-Time
-        </div>
         <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight font-sans text-stone-900 leading-tight">
           Every Drop Counts. <br />
           <span className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 bg-clip-text text-transparent">
